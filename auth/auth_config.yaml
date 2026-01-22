@@ -1,0 +1,15 @@
+credentials:
+  usernames:
+    admin:
+      email: yashviparikh02@gmail.com
+      name: Admin 
+      password: "$2b$12$yZx6gKZ7xW1Z0zZ8XxwM0Oe0P2YxY9y6QpHkL5N4EJH5x0W"
+
+cookie:
+  name: streamlit_auth
+  key: secret_key_123
+  expiry_days: 1
+
+preauthorized:
+  emails:
+    - yashviparikh02@gmail.com

@@ -1,11 +1,19 @@
 from sqlalchemy import create_engine
+import os
 
 def get_engine():
-    # Example: PostgreSQL connection
-    DB_USER = "your_user"
-    DB_PASS = "your_pass"
-    DB_HOST = "localhost"
-    DB_NAME = "your_db"
+    """
+    SQLite database configuration (offline, single-user).
+    Database file will be created automatically if it does not exist.
+    """
 
-    engine = create_engine(f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}")
+    # Ensure data directory exists
+    os.makedirs("data", exist_ok=True)
+
+    db_path = "data/app.db"
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False}
+    )
+
     return engine

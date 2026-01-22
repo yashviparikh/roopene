@@ -1,10 +1,14 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from config.db_config import get_engine
+from db_config import get_engine
 from sqlalchemy import text
 from io import BytesIO
 import time
+
+# if "authentication_status" not in st.session_state or not st.session_state["authentication_status"]:
+#     st.error("Unauthorized access")
+#     st.stop()
 
 st.set_page_config(page_title="Inventory Tracking", layout="wide")
 st.title("Inventory Tracking and Dashboard")

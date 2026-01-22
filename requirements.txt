@@ -1,0 +1,7 @@
+streamlit
+sqlalchemy
+pdfplumber
+fuzzywuzzy
+streamlit-authenticator 
+bcrypt 
+pyyaml
