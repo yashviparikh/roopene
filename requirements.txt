@@ -5,3 +5,7 @@ fuzzywuzzy
 streamlit-authenticator 
 bcrypt 
 pyyaml
+openpyxl
+xlrd
+plotly
+xlsxwriter

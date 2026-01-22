@@ -4,7 +4,7 @@ import pdfplumber
 from io import BytesIO
 from db_config import get_engine
 from fuzzywuzzy import process
-
+import re
 # if "authentication_status" not in st.session_state or not st.session_state["authentication_status"]:
 #     st.error("Unauthorized access")
 #     st.stop()
@@ -12,158 +12,255 @@ from fuzzywuzzy import process
 st.set_page_config(page_title="SOR–BOQ Matching", layout="wide")
 st.title("SOR–BOQ Matching System")
 
+
 # ---------------------------------------------------------------------
 # Utility: Extract table from PDF
 # ---------------------------------------------------------------------
-def extract_pdf_table(pdf_file, min_cols=3):
+def normalize_sor_excel(df):
     rows = []
-    with pdfplumber.open(pdf_file) as pdf:
-        for page in pdf.pages:
-            table = page.extract_table()
-            if table:
-                for row in table:
-                    if row and len(row) >= min_cols:
-                        rows.append(row)
-    return rows
 
+    for _, row in df.iterrows():
 
+        sheet_name = row.get("__sheet__", "").strip()
+
+        # Expected fixed columns:
+        # 0 = S.N.
+        # 1 = Description
+        # 2 = Unit
+        # 3 = Rate
+
+        sn = str(row[0]).strip() if pd.notna(row[0]) else ""
+        description = str(row[1]).strip() if pd.notna(row[1]) else ""
+        unit = str(row[2]).strip() if pd.notna(row[2]) else ""
+        rate_raw = row[3]
+
+        # Skip rows without valid SOR code
+        if not re.match(r"R[0-9A-Za-z\-]+", sn):
+            continue
+
+        # Clean description: remove embedded "Table xx"
+        description = re.sub(r"\bTable\s*\d+\b", "", description, flags=re.I)
+        description = re.sub(r"\s+", " ", description).strip()
+
+        # Normalize rate
+        rate = None
+        if pd.notna(rate_raw):
+            try:
+                rate = float(str(rate_raw).replace(",", "").strip())
+            except ValueError:
+                rate = None
+
+        rows.append([
+            sn,
+            description,
+            unit,
+            rate,
+            sheet_name   # Table number from sheet name
+        ])
+
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "S.N.",
+            "DESCRIPTION OF ITEMS",
+            "UNIT",
+            "Final rate (Excluding GST)",
+            "TABLE_NO"
+        ]
+    )
 # ---------------------------------------------------------------------
 # SECTION 1: Upload & Store SOR (PDF → DB)
 # ---------------------------------------------------------------------
-st.header("Step 1: Upload SOR (PDF)")
+st.header("Step 1: Upload SOR (Excel)")
 
-sor_pdf = st.file_uploader("Upload SOR PDF", type=["pdf"], key="sor")
+sor_excel = st.file_uploader("Upload SOR Excel file", type=["xlsx", "xls"])
 
-if sor_pdf:
-    st.info("Reading SOR PDF...")
+if sor_excel:
+    xls = pd.ExcelFile(sor_excel)
 
-    sor_rows = extract_pdf_table(sor_pdf, min_cols=4)
-    st.info("rows extracted")
-    if not sor_rows:
-        st.error("No table detected in SOR PDF.")
-        st.stop()
+    total_sheets = len(xls.sheet_names)
+    st.info(f"Workbook contains {total_sheets} sheets")
 
-    sor_df = pd.DataFrame(
-        sor_rows,
-        columns=["S.N.", "DESCRIPTION OF ITEMS", "UNIT", "Final rate (Excluding GST)"]
-    )
-    st.info("df made")
-    # Cleaning
-    sor_df = sor_df[sor_df["S.N."] != "S.N."]
-    sor_df["S.N."] = sor_df["S.N."].astype(str).str.strip()
-    sor_df["UNIT"] = sor_df["UNIT"].astype(str).str.strip()
-    sor_df["Final rate (Excluding GST)"] = (
-        sor_df["Final rate (Excluding GST)"]
-        .astype(str)
-        .str.replace(",", "", regex=True)
-        .astype(float, errors="coerce")
+    start_sheet = st.number_input(
+        "Start sheet number (1-based)",
+        min_value=1,
+        max_value=total_sheets,
+        value=5
     )
 
-    st.success("SOR extracted successfully")
-    st.dataframe(sor_df.head(15))
+    end_sheet = st.number_input(
+        "End sheet number (inclusive)",
+        min_value=start_sheet,
+        max_value=total_sheets,
+        value=min(103, total_sheets)
+    )
+    
+    raw_frames = []
 
+    for i in range(start_sheet - 1, end_sheet):
+        sheet_name = xls.sheet_names[i]
+        df = pd.read_excel(
+            sor_excel,
+            sheet_name=sheet_name,
+            header=None
+        )
+        df["__sheet__"] = sheet_name  # optional traceability
+        raw_frames.append(df)
+
+    combined_raw_df = pd.concat(raw_frames, ignore_index=True)
+    
+    sor_df = normalize_sor_excel(combined_raw_df)
+
+    st.success(
+        f"SOR extracted from sheets {start_sheet} to {end_sheet}"
+    )
+    st.dataframe(sor_df)
     if st.button("Save SOR to Database"):
         engine = get_engine()
         sor_df.to_sql("sor", engine, if_exists="replace", index=False)
-        st.success("SOR saved to database")
-
+        st.success("SOR saved to database successfully")
 
 # ---------------------------------------------------------------------
 # SECTION 2: Upload BOQ (PDF → Match)
 # ---------------------------------------------------------------------
-st.header("Step 2: Upload BOQ (PDF)")
+st.header("Step 2: Upload BOQ (Excel)")
 
-boq_pdf = st.file_uploader("Upload BOQ PDF", type=["pdf"], key="boq")
+# Upload BOQ file
+# Upload BOQ file
+boq_file = st.file_uploader(
+    "Upload BOQ Excel file",
+    type=["xlsx", "xls"],
+    key="boq_excel"
+)
 
-if boq_pdf:
-    st.info("Reading BOQ PDF...")
+if boq_file is not None:
+    boq_df = pd.read_excel(boq_file)
 
-    boq_rows = extract_pdf_table(boq_pdf, min_cols=3)
-
-    if not boq_rows:
-        st.error("No table detected in BOQ PDF.")
-        st.stop()
-
-    # Expected BOQ columns:
-    # USOR Code | Description of Work | Qty
-    boq_df = pd.DataFrame(
-        boq_rows,
-        columns=["usor_code", "Description of work", "Qty"]
+    # -------------------------------
+    # Normalize BOQ headers
+    # -------------------------------
+    boq_df.columns = (
+        boq_df.columns
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .str.replace(".", "", regex=False)
+        .str.replace("/", "", regex=False)
+        .str.replace(r"\s+", " ", regex=True)
     )
 
-    boq_df = boq_df[boq_df["usor_code"] != "usor_code"]
-    boq_df["usor_code"] = boq_df["usor_code"].astype(str).str.strip()
-    boq_df["Qty"] = pd.to_numeric(boq_df["Qty"], errors="coerce")
+    rename_map = {
+        "usor code": "usor_code",
+        "usorcode": "usor_code",
+        "description of work": "Description of work",
+        "qty": "Qty",
+        "quantity": "Qty"
+    }
 
-    st.success("BOQ extracted successfully")
-    st.dataframe(boq_df.head(15))
+    boq_df = boq_df.rename(columns=rename_map)
 
-    if st.button("Perform SOR–BOQ Matching"):
-        engine = get_engine()
-        sor_db = pd.read_sql("SELECT * FROM sor", engine)
+    # Drop serial number columns safely
+    boq_df = boq_df.loc[
+        :,
+        ~boq_df.columns.str.contains(r"^sr|^sl|^sno", regex=True)
+    ]
 
-        # -----------------------------------------------------------------
-        # 1. Direct match on USOR code
-        # -----------------------------------------------------------------
+    st.write("**Uploaded BOQ Data (Normalized):**")
+    st.dataframe(boq_df)
+
+    if st.button("Perform SOR - BOQ Matching"):
+        # --- 0. Load SOR from DB ---
+        try:
+            engine = get_engine()
+            sor_db = pd.read_sql("SELECT * FROM sor", engine)
+        except Exception as e:
+            st.error(f"Error reading SOR data from DB: {e}")
+            st.stop()
+
+        # --- 1. Validate BOQ columns ---
+        required_cols = ["usor_code", "Description of work", "Qty"]
+        missing = [c for c in required_cols if c not in boq_df.columns]
+
+        if missing:
+            st.error(
+                f"BOQ file must contain columns: {required_cols}\n"
+                f"Missing: {missing}"
+            )
+            st.stop()
+
+        # --- 2. Merge directly on USOR code ---
         merged = boq_df.merge(
             sor_db,
             left_on="usor_code",
             right_on="S.N.",
-            how="left"
+            how="left",
+            suffixes=("", "_sor")
         )
 
-        # -----------------------------------------------------------------
-        # 2. Fuzzy match fallback (description-based)
-        # -----------------------------------------------------------------
-        unmatched = merged["Final rate (Excluding GST)"].isna()
+        # --- 3. Fuzzy match unmatched items ---
+        unmatched_mask = merged["Final rate (Excluding GST)"].isna()
+        unmatched_indices = merged.index[unmatched_mask]
 
-        if unmatched.any():
-            sor_descs = sor_db["DESCRIPTION OF ITEMS"].tolist()
+        if not unmatched_indices.empty:
+            st.warning(
+                f"Performing fuzzy matching for {len(unmatched_indices)} unmatched items..."
+            )
+            sor_descriptions = sor_db["DESCRIPTION OF ITEMS"].tolist()
 
-            for idx in merged[unmatched].index:
-                boq_desc = merged.at[idx, "Description of work"]
-                match, score = process.extractOne(boq_desc, sor_descs)
-
+            for idx in unmatched_indices:
+                desc = merged.at[idx, "Description of work"]
+                match, score = process.extractOne(desc, sor_descriptions)
                 if score >= 80:
-                    sor_row = sor_db[sor_db["DESCRIPTION OF ITEMS"] == match].iloc[0]
-                    merged.at[idx, "UNIT"] = sor_row["UNIT"]
-                    merged.at[idx, "Final rate (Excluding GST)"] = sor_row["Final rate (Excluding GST)"]
+                    match_row = sor_db[
+                        sor_db["DESCRIPTION OF ITEMS"] == match
+                    ].iloc[0]
 
-        # -----------------------------------------------------------------
-        # 3. Compute totals
-        # -----------------------------------------------------------------
+                    merged.at[idx, "DESCRIPTION OF ITEMS"] = match_row[
+                        "DESCRIPTION OF ITEMS"
+                    ]
+                    merged.at[idx, "UNIT"] = match_row["UNIT"]
+                    merged.at[idx, "Final rate (Excluding GST)"] = match_row[
+                        "Final rate (Excluding GST)"
+                    ]
+
+        # --- 4. Compute totals ---
         merged["Final rate (Excluding GST)"] = pd.to_numeric(
             merged["Final rate (Excluding GST)"], errors="coerce"
         )
-        merged["Total Amount (Rs)"] = merged["Qty"] * merged["Final rate (Excluding GST)"]
 
-        # -----------------------------------------------------------------
-        # 4. Final Output
-        # -----------------------------------------------------------------
-        result = merged[
-            [
-                "usor_code",
-                "Description of work",
-                "Qty",
-                "UNIT",
-                "Final rate (Excluding GST)",
-                "Total Amount (Rs)",
-            ]
+        merged["Total Amount (Rs)"] = (
+            merged["Qty"] * merged["Final rate (Excluding GST)"]
+        )
+
+        # --- 5. Prepare final output ---
+        output_cols = [
+            "usor_code",
+            "Description of work",
+            "Qty",
+            "UNIT",
+            "Final rate (Excluding GST)",
+            "Total Amount (Rs)",
         ]
 
-        st.success("SOR–BOQ Matching completed")
-        st.dataframe(result.head(20))
+        result = merged[output_cols]
 
-        # -----------------------------------------------------------------
-        # 5. Download Excel
-        # -----------------------------------------------------------------
-        buffer = BytesIO()
-        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-            result.to_excel(writer, index=False, sheet_name="SOR_BOQ")
+        st.success("SOR–BOQ Matching completed successfully.")
+        st.dataframe(result)
+
+        # --- 6. Download as Excel ---
+        output_buffer = BytesIO()
+        with pd.ExcelWriter(output_buffer, engine="xlsxwriter") as writer:
+            result.to_excel(
+                writer,
+                index=False,
+                sheet_name="SOR_BOQ_Match"
+            )
+
+        output_buffer.seek(0)
 
         st.download_button(
-            "Download Output Excel",
-            buffer.getvalue(),
+            label="Download Matched Excel File",
+            data=output_buffer,
             file_name="SOR_BOQ_Matched.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
