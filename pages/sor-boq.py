@@ -94,7 +94,7 @@ if sor_excel:
         max_value=total_sheets,
         value=min(103, total_sheets)
     )
-    
+    st.info(f"Extracting... ")
     raw_frames = []
 
     for i in range(start_sheet - 1, end_sheet):
