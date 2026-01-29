@@ -9,8 +9,8 @@ st.title("Inventory Management")
 
 engine = get_engine()
 
-if "inventory_items" not in st.session_state:
-    st.session_state.inventory_items = []
+if "inventory_items" not in st.session_state or not st.session_state.inventory_items:
+    st.session_state.inventory_items = [{"item_name": "", "qty": 0.0, "rate": 0.0, "unit": "kg"}]
 
 # Create table if not exists
 def create_inventory_table():
@@ -68,6 +68,7 @@ def generate_challan_html(
             body {{
                 font-family: Arial;
                 margin: 30px;
+                background-color: #ffffff;
             }}
             h2, h3 {{
                 text-align: center;
@@ -145,12 +146,7 @@ module = st.radio(
 if module == "Add Inventory":
     st.header("Add Inventory (Batch-wise)")
 
-    # ---------- SAFE INITIALIZATION ----------
-    if "inventory_items" not in st.session_state:
-        st.session_state.inventory_items = [
-            {"item_name": "", "qty": 0.0, "rate": 0.0, "unit": "kg"}
-        ]
-
+    # ---------- BATCH INFO ----------
     col1, col2, col3 = st.columns(3)
     supplier = col1.text_input("Supplier Name / ID")
     batch_no = col2.text_input("Batch No")
@@ -161,37 +157,56 @@ if module == "Add Inventory":
 
     updated_items = []
 
+    # ---------- ITEM ROWS ----------
     for idx, item in enumerate(st.session_state.inventory_items):
-        cols = st.columns(4)
+        # 5 columns: 4 for inputs, 1 for Add Item button
+        cols = st.columns([3, 2, 2, 2, 1])
 
         item_name = cols[0].text_input(
             "Item Name",
             value=item["item_name"],
-            key=f"item_name_{idx}"
+            key=f"item_name_{idx}",
+            placeholder="Item Name",
+            label_visibility="collapsed"
         )
 
         qty = cols[1].number_input(
-            "Qty",
+            "Quantity",
             min_value=0.0,
             value=item["qty"],
-            key=f"qty_{idx}"
+            key=f"qty_{idx}",
+            step=0.01,
+            format="%.2f",
+            label_visibility="collapsed"
         )
 
         rate = cols[2].number_input(
             "Rate",
             min_value=0.0,
             value=item["rate"],
-            key=f"rate_{idx}"
+            key=f"rate_{idx}",
+            step=0.01,
+            format="%.2f",
+            label_visibility="collapsed"
         )
 
         unit = cols[3].selectbox(
             "Unit",
             ["kg", "nos", "m", "ltr"],
             index=["kg", "nos", "m", "ltr"].index(item["unit"]),
-            key=f"unit_{idx}"
+            key=f"unit_{idx}",
+            label_visibility="collapsed"
         )
 
-        # Collect updated values (NO mutation during render)
+
+        # Only show Add Item button next to last row
+        if idx == len(st.session_state.inventory_items) - 1:
+            if cols[4].button("➕ Add Item"):
+                st.session_state.inventory_items.append(
+                    {"item_name": "", "qty": 0.0, "rate": 0.0, "unit": "kg"}
+                )
+                st.rerun()
+
         updated_items.append({
             "item_name": item_name,
             "qty": qty,
@@ -199,15 +214,8 @@ if module == "Add Inventory":
             "unit": unit
         })
 
-    # Commit updates AFTER rendering widgets
     st.session_state.inventory_items = updated_items
 
-    # ---------- ADD ITEM ----------
-    if st.button("Add an Item"):
-        st.session_state.inventory_items.append(
-            {"item_name": "", "qty": 0.0, "rate": 0.0, "unit": "kg"}
-        )
-        st.rerun()
 
     # ---------- SAVE BATCH ----------
     if st.button("Save Batch Inventory"):
@@ -248,21 +256,47 @@ if module == "Add Inventory":
                 )
 
         st.success(f"Batch {batch_no} saved successfully!")
-        st.session_state.inventory_items = []
+        # Reset to one default row after saving
+        st.session_state.inventory_items = [
+            {"item_name": "", "qty": 0.0, "rate": 0.0, "unit": "kg"}
+        ]
         st.rerun()
 
 # ------------------- VIEW INVENTORY -------------------
 elif module == "View Inventory":
     st.header("Current Inventory")
+
+    # ---------- SEARCH FILTERS ----------
+    col1, col2 = st.columns(2)
+    supplier_filter = col1.text_input("Search by Supplier Name / ID")
+    batch_filter = col2.text_input("Search by Batch No")
+
+    query = "SELECT * FROM inventory_master WHERE 1=1"
+    params = {}
+
+    if supplier_filter.strip():
+        query += " AND LOWER(supplier_name) LIKE LOWER(:supplier)"
+        params["supplier"] = f"%{supplier_filter.strip()}%"
+
+    if batch_filter.strip():
+        query += " AND LOWER(batch_no) LIKE LOWER(:batch)"
+        params["batch"] = f"%{batch_filter.strip()}%"
+
+    query += " ORDER BY id DESC"
+
+    # ---------- FETCH DATA ----------
     try:
         with engine.connect() as conn:
-            inv_df = pd.read_sql("SELECT * FROM inventory_master ORDER BY id DESC", conn)
+            inv_df = pd.read_sql(text(query), conn, params=params)
+
         if inv_df.empty:
-            st.info("No inventory found.")
+            st.info("No inventory found for the given filters.")
         else:
-            st.dataframe(inv_df, use_container_width=True)
+            st.dataframe(inv_df, width='stretch')
+
     except OperationalError:
         st.error("Inventory table not found.")
+
 
 # ------------------- GENERATE CHALLAN -------------------
 elif module == "Generate Challan":
@@ -274,15 +308,32 @@ elif module == "Generate Challan":
     if "search_inventory" not in st.session_state:
         st.session_state["search_inventory"] = False
 
-    # ---------------- HEADER ----------------
-    header_col, button_col = st.columns([8, 2])
+    # ---------------- HEADER + ACTION BUTTONS ----------------
+    header_col, action_col = st.columns([8, 2])
+
     with header_col:
         st.header("Generate Challan")
 
-    with button_col:
-        if st.session_state["challan_view_mode"] == "generate":
-            if st.button("View / Print Challans"):
+    with action_col:
+        view_col, reset_col = st.columns(2)
+
+        # ---- VIEW / PRINT ----
+        with view_col:
+            if st.button("View / Print"):
                 st.session_state["challan_view_mode"] = "view"
+                st.rerun()
+
+        # ---- RESET ----
+        with reset_col:
+            if st.button("Reset"):
+                st.session_state["search_inventory"] = False
+                st.session_state.pop("inv_df", None)
+
+                # remove all qty inputs
+                for key in list(st.session_state.keys()):
+                    if key.startswith("qty_"):
+                        del st.session_state[key]
+
                 st.rerun()
 
     # =========================================================
@@ -292,7 +343,6 @@ elif module == "Generate Challan":
 
         supplier = st.text_input("Supplier ID / Name")
         batch_no = st.text_input("Batch No")
-        project_location = st.text_input("Project Location")
 
         if st.button("Search Inventory"):
             st.session_state["search_inventory"] = True
@@ -303,11 +353,18 @@ elif module == "Generate Challan":
                 with engine.connect() as conn:
                     inv_df = pd.read_sql(
                         text("""
-                            SELECT id, item_name, qty_available, unit
+                            SELECT 
+                                id,
+                                item_name,
+                                supplier_name,
+                                batch_no,
+                                qty_available,
+                                unit
                             FROM inventory_master
                             WHERE qty_available > 0
                               AND LOWER(supplier_name) LIKE LOWER(:supplier)
                               AND LOWER(batch_no) LIKE LOWER(:batch)
+                            ORDER BY supplier_name, batch_no, item_name
                         """),
                         conn,
                         params={
@@ -330,7 +387,7 @@ elif module == "Generate Challan":
 
         if st.session_state["search_inventory"] and not inv_df.empty:
             st.success(f"{len(inv_df)} item(s) found")
-            st.dataframe(inv_df, use_container_width=True)
+            st.dataframe(inv_df, width='stretch')
 
             selected_ids = st.multiselect(
                 "Select Inventory Items",
@@ -346,7 +403,7 @@ elif module == "Generate Challan":
                     st.session_state[key] = 0.0
 
                 qty = st.number_input(
-                    f"Issue Qty for {row['item_name']} (Max: {max_qty})",
+                    f"Issue Qty – {row['item_name']} (Max {max_qty})",
                     min_value=0.0,
                     max_value=max_qty,
                     value=st.session_state[key],
@@ -356,11 +413,11 @@ elif module == "Generate Challan":
 
                 issue_data.append((inv_id, qty))
 
+        project_location = st.text_input("Project Location")
+
         # -------- VALIDATION --------
         def is_challan_valid(data):
-            if not data:
-                return False
-            return any(qty > 0 for _, qty in data)
+            return bool(data) and any(qty > 0 for _, qty in data)
 
         # -------- GENERATE CHALLAN --------
         if st.button("Generate Challan"):
@@ -370,7 +427,7 @@ elif module == "Generate Challan":
                 st.stop()
 
             if not is_challan_valid(issue_data):
-                st.error("Cannot generate challan: all selected items have zero quantity.")
+                st.error("All selected items have zero quantity.")
                 st.stop()
 
             valid_items = [(iid, qty) for iid, qty in issue_data if qty > 0]
@@ -382,10 +439,7 @@ elif module == "Generate Challan":
                         (supplier_id, project_location, challan_date)
                         VALUES (:supplier, :location, CURRENT_TIMESTAMP)
                     """),
-                    {
-                        "supplier": supplier,
-                        "location": project_location
-                    }
+                    {"supplier": supplier, "location": project_location}
                 ).lastrowid
 
                 for inv_id, qty in valid_items:
@@ -409,19 +463,22 @@ elif module == "Generate Challan":
 
             st.success(f"Challan CHLN-{challan_id} generated successfully")
 
-            # Auto switch to View mode after generation
             st.session_state["challan_view_mode"] = "view"
             st.rerun()
+
 
     # =========================================================
     # ================= VIEW / PRINT MODE =====================
     # =========================================================
+    if "opened_challan_id" not in st.session_state:
+        st.session_state["opened_challan_id"] = None
+
     if st.session_state["challan_view_mode"] == "view":
 
-        col1, col2 = st.columns([8, 2])
-        with col1:
+        title_col, btn_col = st.columns([8, 2])
+        with title_col:
             st.subheader("View / Print Challans")
-        with col2:
+        with btn_col:
             if st.button("← Back to Generate"):
                 st.session_state["challan_view_mode"] = "generate"
                 st.rerun()
@@ -435,21 +492,58 @@ elif module == "Generate Challan":
 
         if challan_df.empty:
             st.info("No challans available.")
-        else:
-            challan_df["challan_date"] = pd.to_datetime(challan_df["challan_date"])
+            st.stop()
 
-            selected_challan = st.selectbox(
-                "Select Challan",
-                challan_df["challan_id"].tolist(),
-                format_func=lambda x: f"CHLN-{x}"
-            )
+        challan_df["challan_date"] = pd.to_datetime(challan_df["challan_date"])
 
-            if st.button("Open & Print Challan"):
+        # ---------- TABLE HEADERS ----------
+        h1, h2, h3, h4, h5 = st.columns([1.2, 2, 2, 1.5, 2])
+        h1.markdown("**Challan No**")
+        h2.markdown("**Supplier**")
+        h3.markdown("**Project Location**")
+        h4.markdown("**Date**")
+        h5.markdown("**Actions**")
+
+        st.divider()
+
+        # ---------- TABLE ROWS ----------
+        for _, row in challan_df.iterrows():
+            challan_id = row["challan_id"]
+
+            c1, c2, c3, c4, c5 = st.columns([1.2, 2, 2, 1.5, 2])
+
+            c1.write(f"CHLN-{challan_id}")
+            c2.write(row["supplier_id"])
+            c3.write(row["project_location"])
+            c4.write(row["challan_date"].strftime("%d-%m-%Y"))
+
+            # ---- ACTION BUTTONS SIDE BY SIDE ----
+            b1, b2 = c5.columns(2)
+
+            # OPEN
+            if b1.button("Open", key=f"open_{challan_id}"):
+                st.session_state["opened_challan_id"] = challan_id
+                st.rerun()
+            # ---------- OPENED CHALLAN ----------
+            if st.session_state["opened_challan_id"] is not None:
+
+                open_id = st.session_state["opened_challan_id"]
+
+                st.divider()
+
+                title_col, close_col = st.columns([8, 2])
+                with title_col:
+                    st.subheader(f"Challan Preview – CHLN-{open_id}")
+                with close_col:
+                    if st.button("❌ Close"):
+                        st.session_state["opened_challan_id"] = None
+                        st.rerun()
+
                 with engine.connect() as conn:
                     header = pd.read_sql(
                         text("SELECT * FROM challan_header WHERE challan_id = :cid"),
                         conn,
-                        params={"cid": selected_challan}
+                        params={"cid": open_id}
                     ).iloc[0]
 
                     items_df = pd.read_sql(
@@ -460,21 +554,53 @@ elif module == "Generate Challan":
                             WHERE ci.challan_id = :cid
                         """),
                         conn,
-                        params={"cid": selected_challan}
+                        params={"cid": open_id}
                     )
 
                 items = [
-                    {
-                        "name": r["item_name"],
-                        "qty": r["qty_issued"],
-                        "unit": r["unit"]
-                    }
+                    {"name": r["item_name"], "qty": r["qty_issued"], "unit": r["unit"]}
                     for _, r in items_df.iterrows()
                 ]
 
                 html = generate_challan_html(
-                    challan_no=f"CHLN-{selected_challan}",
-                    date=header["challan_date"].strftime("%d-%m-%Y"),
+                    challan_no=f"CHLN-{open_id}",
+                    date=header["challan_date"],
+                    po_no="",
+                    project_location=header["project_location"],
+                    items=items
+                )
+
+                st.components.v1.html(html, height=900, scrolling=True)
+
+
+            # PRINT
+            if b2.button("Print", key=f"print_{challan_id}"):
+                with engine.connect() as conn:
+                    header = pd.read_sql(
+                        text("SELECT * FROM challan_header WHERE challan_id = :cid"),
+                        conn,
+                        params={"cid": challan_id}
+                    ).iloc[0]
+
+                    items_df = pd.read_sql(
+                        text("""
+                            SELECT im.item_name, im.unit, ci.qty_issued
+                            FROM challan_items ci
+                            JOIN inventory_master im ON ci.inventory_id = im.id
+                            WHERE ci.challan_id = :cid
+                        """),
+                        conn,
+                        params={"cid": challan_id}
+                    )
+
+                items = [
+                    {"name": r["item_name"], "qty": r["qty_issued"], "unit": r["unit"]}
+                    for _, r in items_df.iterrows()
+                ]
+
+                html = generate_challan_html(
+                    challan_no=f"CHLN-{challan_id}",
+                    date=header["challan_date"],
                     po_no="",
                     project_location=header["project_location"],
                     items=items
@@ -488,4 +614,4 @@ elif module == "Generate Challan":
                 </script>
                 """
 
-                st.components.v1.html(html, height=900, scrolling=True)
+                st.components.v1.html(html, height=900, scrolling=True) 
