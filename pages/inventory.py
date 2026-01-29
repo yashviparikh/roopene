@@ -145,6 +145,12 @@ module = st.radio(
 if module == "Add Inventory":
     st.header("Add Inventory (Batch-wise)")
 
+    # ---------- SAFE INITIALIZATION ----------
+    if "inventory_items" not in st.session_state:
+        st.session_state.inventory_items = [
+            {"item_name": "", "qty": 0.0, "rate": 0.0, "unit": "kg"}
+        ]
+
     col1, col2, col3 = st.columns(3)
     supplier = col1.text_input("Supplier Name / ID")
     batch_no = col2.text_input("Batch No")
@@ -153,53 +159,73 @@ if module == "Add Inventory":
 
     st.subheader("Add Item to Batch")
 
+    updated_items = []
+
     for idx, item in enumerate(st.session_state.inventory_items):
         cols = st.columns(4)
 
-        item["item_name"] = cols[0].text_input(
+        item_name = cols[0].text_input(
             "Item Name",
-            value=item.get("item_name", ""),
+            value=item["item_name"],
             key=f"item_name_{idx}"
         )
 
-        item["qty"] = cols[1].number_input(
+        qty = cols[1].number_input(
             "Qty",
             min_value=0.0,
-            value=item.get("qty", 0.0),
+            value=item["qty"],
             key=f"qty_{idx}"
         )
 
-        item["rate"] = cols[2].number_input(
+        rate = cols[2].number_input(
             "Rate",
             min_value=0.0,
-            value=item.get("rate", 0.0),
+            value=item["rate"],
             key=f"rate_{idx}"
         )
 
-        item["unit"] = cols[3].selectbox(
+        unit = cols[3].selectbox(
             "Unit",
             ["kg", "nos", "m", "ltr"],
-            index=["kg", "nos", "m", "ltr"].index(item.get("unit", "kg")),
+            index=["kg", "nos", "m", "ltr"].index(item["unit"]),
             key=f"unit_{idx}"
         )
-    if st.button("Add Another Item"):
-        st.session_state.inventory_items.append({})
 
+        # Collect updated values (NO mutation during render)
+        updated_items.append({
+            "item_name": item_name,
+            "qty": qty,
+            "rate": rate,
+            "unit": unit
+        })
 
-    # Save entire batch
+    # Commit updates AFTER rendering widgets
+    st.session_state.inventory_items = updated_items
+
+    # ---------- ADD ITEM ----------
+    if st.button("Add an Item"):
+        st.session_state.inventory_items.append(
+            {"item_name": "", "qty": 0.0, "rate": 0.0, "unit": "kg"}
+        )
+        st.rerun()
+
+    # ---------- SAVE BATCH ----------
     if st.button("Save Batch Inventory"):
-        if (
-            not supplier.strip()
-            or not batch_no.strip()
-            or not st.session_state.inventory_items
-        ):
-            st.error("Supplier, Batch No and at least one item are required.")
+        if not supplier.strip() or not batch_no.strip():
+            st.error("Supplier and Batch No are required.")
+            st.stop()
+
+        valid_items = [
+            i for i in st.session_state.inventory_items
+            if i["item_name"] and i["qty"] > 0 and i["rate"] > 0
+        ]
+
+        if not valid_items:
+            st.error("At least one valid item is required.")
             st.stop()
 
         with engine.begin() as conn:
-            for item in st.session_state.inventory_items:
-                if (not item.get("item_name") or item.get("qty", 0) <= 0 or item.get("rate", 0) <= 0):
-                    continue
+            for item in valid_items:
                 conn.execute(
                     text("""
                         INSERT INTO inventory_master
@@ -223,7 +249,7 @@ if module == "Add Inventory":
 
         st.success(f"Batch {batch_no} saved successfully!")
         st.session_state.inventory_items = []
-
+        st.rerun()
 
 # ------------------- VIEW INVENTORY -------------------
 elif module == "View Inventory":
@@ -310,9 +336,13 @@ elif module == "Generate Challan":
     # --- VALIDATION BEFORE GENERATING CHALLAN ---
     def is_challan_valid(issue_data):
         if not issue_data:
-            return False  # No items selected
-        if len(issue_data) == 1 and issue_data[0][1] == 0:
-            return False  # Only one item and qty is zero
+            return False  # nothing selected
+
+        total_issued_qty = sum(qty for _, qty in issue_data)
+
+        if total_issued_qty <= 0:
+            return False  # all quantities are zero
+
         return True
 
     # Generate challan button
@@ -324,6 +354,11 @@ elif module == "Generate Challan":
         if not is_challan_valid(issue_data):
             st.error("Cannot generate challan: No items selected or only one item with zero quantity.")
             st.stop()
+        valid_items = [(iid, qty) for iid, qty in issue_data if qty > 0]
+        if not valid_items:
+            st.error("Cannot generate challan: all issue quantities are zero.")
+            st.stop()
+
 
         with engine.begin() as conn:
             challan_id = conn.execute(
@@ -335,7 +370,7 @@ elif module == "Generate Challan":
                 {"supplier": supplier, "location": project_location}
             ).lastrowid
 
-            for inv_id, qty in issue_data:
+            for inv_id, qty in valid_items:
                 if qty > 0:
                     conn.execute(
                         text("""
