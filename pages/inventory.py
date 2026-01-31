@@ -481,15 +481,13 @@ elif module == "Generate Challan":
             st.session_state["challan_view_mode"] = "view"
             st.rerun()
 
-        # ================= VIEW / PRINT MODE =====================
+    # ================= VIEW / PRINT MODE =====================
     if "opened_challan_id" not in st.session_state:
         st.session_state["opened_challan_id"] = None
 
     if st.session_state.get("challan_view_mode") == "view":
 
-        title_col, _ = st.columns([8, 2])
-        with title_col:
-            st.subheader("View / Print Challans")
+        st.subheader("View / Print Challans")
 
         # Fetch all challans
         with engine.connect() as conn:
@@ -533,51 +531,51 @@ elif module == "Generate Challan":
             if b2.button("Print", key=f"print_{challan_id}"):
                 print_challan(challan_id)
 
-        # ---------- OPENED CHALLAN PREVIEW (ONLY ONCE) ----------
-        if st.session_state.get("opened_challan_id") is not None:
-            open_id = st.session_state["opened_challan_id"]
-            st.divider()
-            title_col, close_col = st.columns([8, 2])
-            with title_col:
-                st.subheader(f"Challan Preview – CHLN-{open_id}")
-            with close_col:
-                if st.button("X", key=f"close_{open_id}"):
-                    st.session_state["opened_challan_id"] = None
-                    st.rerun()
+            # ---------- PREVIEW UNDER THIS ROW ----------
+            if st.session_state.get("opened_challan_id") == challan_id:
+                st.divider()
+                title_col, close_col = st.columns([12, 1])
+                with title_col:
+                    st.subheader(f"Challan Preview – CHLN-{challan_id}")
+                with close_col:
+                    if st.button("X", key=f"close_{challan_id}"):
+                        st.session_state["opened_challan_id"] = None
+                        st.rerun()
 
-            # Fetch header & items for preview
-            with engine.connect() as conn:
-                header = pd.read_sql(
-                    text("SELECT * FROM challan_header WHERE challan_id = :cid"),
-                    conn,
-                    params={"cid": open_id}
-                ).iloc[0]
+                # Fetch header & items for preview
+                with engine.connect() as conn:
+                    header = pd.read_sql(
+                        text("SELECT * FROM challan_header WHERE challan_id = :cid"),
+                        conn,
+                        params={"cid": challan_id}
+                    ).iloc[0]
 
-                items_df = pd.read_sql(
-                    text("""
-                        SELECT im.item_name, im.unit, ci.qty_issued
-                        FROM challan_items ci
-                        JOIN inventory_master im ON ci.inventory_id = im.id
-                        WHERE ci.challan_id = :cid
-                    """),
-                    conn,
-                    params={"cid": open_id}
+                    items_df = pd.read_sql(
+                        text("""
+                            SELECT im.item_name, im.unit, ci.qty_issued
+                            FROM challan_items ci
+                            JOIN inventory_master im ON ci.inventory_id = im.id
+                            WHERE ci.challan_id = :cid
+                        """),
+                        conn,
+                        params={"cid": challan_id}
+                    )
+
+                items = [
+                    {"name": r["item_name"], "qty": r["qty_issued"], "unit": r["unit"]}
+                    for _, r in items_df.iterrows()
+                ]
+
+                html = generate_challan_html(
+                    challan_no=f"CHLN-{challan_id}",
+                    date=header["challan_date"],
+                    po_no="",
+                    project_location=header["project_location"],
+                    items=items
                 )
 
-            items = [
-                {"name": r["item_name"], "qty": r["qty_issued"], "unit": r["unit"]}
-                for _, r in items_df.iterrows()
-            ]
-
-            html = generate_challan_html(
-                challan_no=f"CHLN-{open_id}",
-                date=header["challan_date"],
-                po_no="",
-                project_location=header["project_location"],
-                items=items
-            )
-
-            st.components.v1.html(html, height=900, scrolling=True)
+                st.components.v1.html(html, height=900, scrolling=True)
+                st.divider() 
 
 # ---------- PRINT FUNCTION ----------
 def print_challan(challan_id):
