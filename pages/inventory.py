@@ -10,7 +10,7 @@ st.title("Inventory Management")
 engine = get_engine()
 
 if "inventory_items" not in st.session_state or not st.session_state.inventory_items:
-    st.session_state.inventory_items = [{"item_name": "", "qty": 0.0, "rate": 0.0, "unit": "kg"}]
+    st.session_state.inventory_items = [{"item_name": "", "qty": 0, "rate": 0.0, "unit": "kg"}]
 
 # Create table if not exists
 def create_inventory_table():
@@ -146,79 +146,88 @@ module = st.radio(
 if module == "Add Inventory":
     st.header("Add Inventory (Batch-wise)")
 
-    # ---------- BATCH INFO ----------
-    col1, col2, col3 = st.columns(3)
-    supplier = col1.text_input("Supplier Name / ID")
-    batch_no = col2.text_input("Batch No")
-    invoice_no = col3.text_input("Invoice No")
-    purchase_date = st.date_input("Purchase Date")
+    # Initialize session state once
+    if "inventory_items" not in st.session_state:
+        st.session_state.inventory_items = [
+            {"item_name": "", "qty": 0, "rate": 0.0, "unit": "kg"}
+        ]
 
-    st.subheader("Add Item to Batch")
-
-    updated_items = []
-
-    # ---------- ITEM ROWS ----------
-    for idx, item in enumerate(st.session_state.inventory_items):
-        # 5 columns: 4 for inputs, 1 for Add Item button
-        cols = st.columns([3, 2, 2, 2, 1])
-
-        item_name = cols[0].text_input(
-            "Item Name",
-            value=item["item_name"],
-            key=f"item_name_{idx}",
-            placeholder="Item Name",
-            label_visibility="collapsed"
+    # -------- ADD ITEM (OUTSIDE FORM — REQUIRED) --------
+    if st.button("➕ Add Item"):
+        st.session_state.inventory_items.append(
+            {"item_name": "", "qty": 0, "rate": 0.0, "unit": "kg"}
         )
+        st.rerun()
 
-        qty = cols[1].number_input(
-            "Quantity",
-            min_value=0.0,
-            value=item["qty"],
-            key=f"qty_{idx}",
-            step=0.01,
-            format="%.2f",
-            label_visibility="collapsed"
-        )
+    # ---------------- FORM START ----------------
+    with st.form("batch_inventory_form", clear_on_submit=True):
 
-        rate = cols[2].number_input(
-            "Rate",
-            min_value=0.0,
-            value=item["rate"],
-            key=f"rate_{idx}",
-            step=0.01,
-            format="%.2f",
-            label_visibility="collapsed"
-        )
+        # ---------- BATCH INFO ----------
+        col1, col2, col3 = st.columns(3)
+        supplier = col1.text_input("Supplier Name / ID")
+        batch_no = col2.text_input("Batch No")
+        invoice_no = col3.text_input("Invoice No")
+        purchase_date = st.date_input("Purchase Date")
 
-        unit = cols[3].selectbox(
-            "Unit",
-            ["kg", "nos", "m", "ltr"],
-            index=["kg", "nos", "m", "ltr"].index(item["unit"]),
-            key=f"unit_{idx}",
-            label_visibility="collapsed"
-        )
+        st.subheader("Add Items to Batch")
 
+        updated_items = []
 
-        # Only show Add Item button next to last row
-        if idx == len(st.session_state.inventory_items) - 1:
-            if cols[4].button("➕ Add Item"):
-                st.session_state.inventory_items.append(
-                    {"item_name": "", "qty": 0.0, "rate": 0.0, "unit": "kg"}
-                )
-                st.rerun()
+        # ---------- ITEM ROWS ----------
+        for idx, item in enumerate(st.session_state.inventory_items):
+            cols = st.columns([3, 2, 2, 2])
 
-        updated_items.append({
-            "item_name": item_name,
-            "qty": qty,
-            "rate": rate,
-            "unit": unit
-        })
+            item_name = cols[0].text_input(
+                "Item Name",
+                key=f"item_name_{idx}",
+                value=item["item_name"],
+                label_visibility="collapsed"
+            )
 
+            qty = cols[1].number_input(
+                "Quantity",
+                min_value=0,
+                step=1,
+                key=f"qty_{idx}",
+                value=item["qty"],
+                label_visibility="collapsed"
+            )
+
+            rate = cols[2].number_input(
+                "Rate",
+                min_value=0.0,
+                step=0.01,
+                format="%.2f",
+                key=f"rate_{idx}",
+                value=item["rate"],
+                label_visibility="collapsed"
+            )
+
+            unit = cols[3].selectbox(
+                "Unit",
+                ["kg", "nos", "m", "ltr"],
+                index=["kg", "nos", "m", "ltr"].index(item["unit"]),
+                key=f"unit_{idx}",
+                label_visibility="collapsed"
+            )
+
+            updated_items.append({
+                "item_name": item_name,
+                "qty": qty,
+                "rate": rate,
+                "unit": unit
+            })
+
+        # ---------- SUBMIT ----------
+        submitted = st.form_submit_button("Save Batch Inventory")
+
+    # ---------------- FORM END ----------------
+
+    # Update state AFTER form render
     st.session_state.inventory_items = updated_items
 
-
-    # ---------- SAVE BATCH ----------
-    if st.button("Save Batch Inventory"):
+    # ---------- SAVE LOGIC ----------
+    if submitted:
         if not supplier.strip() or not batch_no.strip():
             st.error("Supplier and Batch No are required.")
             st.stop()
@@ -256,11 +265,11 @@ if module == "Add Inventory":
                 )
 
         st.success(f"Batch {batch_no} saved successfully!")
-        # Reset to one default row after saving
+
+        # Reset to one default row
         st.session_state.inventory_items = [
-            {"item_name": "", "qty": 0.0, "rate": 0.0, "unit": "kg"}
+            {"item_name": "", "qty": 0, "rate": 0.0, "unit": "kg"}
         ]
-        st.rerun()
 
 # ------------------- VIEW INVENTORY -------------------
 elif module == "View Inventory":
@@ -310,37 +319,43 @@ elif module == "Generate Challan":
 
     # ---------------- HEADER + ACTION BUTTONS ----------------
     header_col, action_col = st.columns([8, 2])
-
     with header_col:
         st.header("Generate Challan")
 
+    # ---------------- BUTTONS ----------------
     with action_col:
-        view_col, reset_col = st.columns(2)
+        if st.session_state["challan_view_mode"] == "generate":
+            view_col, reset_col = st.columns(2)
 
-        # ---- VIEW / PRINT ----
-        with view_col:
-            if st.button("View / Print"):
-                st.session_state["challan_view_mode"] = "view"
-                st.rerun()
+            # ---- VIEW / PRINT ----
+            with view_col:
+                if st.button("View / Print"):
+                    st.session_state["challan_view_mode"] = "view"
+                    st.rerun()
 
-        # ---- RESET ----
-        with reset_col:
-            if st.button("Reset"):
-                st.session_state["search_inventory"] = False
-                st.session_state.pop("inv_df", None)
+            # ---- RESET ----
+            with reset_col:
+                if st.button("Reset"):
+                    st.session_state["search_inventory"] = False
+                    st.session_state.pop("inv_df", None)
 
-                # remove all qty inputs
-                for key in list(st.session_state.keys()):
-                    if key.startswith("qty_"):
-                        del st.session_state[key]
+                    # remove all qty inputs
+                    for key in list(st.session_state.keys()):
+                        if key.startswith("qty_"):
+                            del st.session_state[key]
 
+                    st.rerun()
+
+        elif st.session_state["challan_view_mode"] == "view":
+            # Show only Back button in view mode
+            if st.button("← Back to Generate", key="back_to_generate"):
+                st.session_state["challan_view_mode"] = "generate"
                 st.rerun()
 
     # =========================================================
     # ================= GENERATE MODE =========================
     # =========================================================
     if st.session_state["challan_view_mode"] == "generate":
-
         supplier = st.text_input("Supplier ID / Name")
         batch_no = st.text_input("Batch No")
 
@@ -404,10 +419,10 @@ elif module == "Generate Challan":
 
                 qty = st.number_input(
                     f"Issue Qty – {row['item_name']} (Max {max_qty})",
-                    min_value=0.0,
+                    min_value=0,
                     max_value=max_qty,
                     value=st.session_state[key],
-                    step=0.01,
+                    step=1,
                     key=key
                 )
 
@@ -466,23 +481,17 @@ elif module == "Generate Challan":
             st.session_state["challan_view_mode"] = "view"
             st.rerun()
 
-
-    # =========================================================
-    # ================= VIEW / PRINT MODE =====================
-    # =========================================================
+        # ================= VIEW / PRINT MODE =====================
     if "opened_challan_id" not in st.session_state:
         st.session_state["opened_challan_id"] = None
 
-    if st.session_state["challan_view_mode"] == "view":
+    if st.session_state.get("challan_view_mode") == "view":
 
-        title_col, btn_col = st.columns([8, 2])
+        title_col, _ = st.columns([8, 2])
         with title_col:
             st.subheader("View / Print Challans")
-        with btn_col:
-            if st.button("← Back to Generate"):
-                st.session_state["challan_view_mode"] = "generate"
-                st.rerun()
 
+        # Fetch all challans
         with engine.connect() as conn:
             challan_df = pd.read_sql("""
                 SELECT challan_id, supplier_id, project_location, challan_date
@@ -503,7 +512,6 @@ elif module == "Generate Challan":
         h3.markdown("**Project Location**")
         h4.markdown("**Date**")
         h5.markdown("**Actions**")
-
         st.divider()
 
         # ---------- TABLE ROWS ----------
@@ -511,107 +519,104 @@ elif module == "Generate Challan":
             challan_id = row["challan_id"]
 
             c1, c2, c3, c4, c5 = st.columns([1.2, 2, 2, 1.5, 2])
-
             c1.write(f"CHLN-{challan_id}")
             c2.write(row["supplier_id"])
             c3.write(row["project_location"])
             c4.write(row["challan_date"].strftime("%d-%m-%Y"))
 
-            # ---- ACTION BUTTONS SIDE BY SIDE ----
+            # Buttons
             b1, b2 = c5.columns(2)
-
-            # OPEN
             if b1.button("Open", key=f"open_{challan_id}"):
                 st.session_state["opened_challan_id"] = challan_id
                 st.rerun()
-            # ---------- OPENED CHALLAN ----------
-            if st.session_state["opened_challan_id"] is not None:
 
-                open_id = st.session_state["opened_challan_id"]
-
-                st.divider()
-
-                title_col, close_col = st.columns([8, 2])
-                with title_col:
-                    st.subheader(f"Challan Preview – CHLN-{open_id}")
-                with close_col:
-                    if st.button("❌ Close"):
-                        st.session_state["opened_challan_id"] = None
-                        st.rerun()
-
-                with engine.connect() as conn:
-                    header = pd.read_sql(
-                        text("SELECT * FROM challan_header WHERE challan_id = :cid"),
-                        conn,
-                        params={"cid": open_id}
-                    ).iloc[0]
-
-                    items_df = pd.read_sql(
-                        text("""
-                            SELECT im.item_name, im.unit, ci.qty_issued
-                            FROM challan_items ci
-                            JOIN inventory_master im ON ci.inventory_id = im.id
-                            WHERE ci.challan_id = :cid
-                        """),
-                        conn,
-                        params={"cid": open_id}
-                    )
-
-                items = [
-                    {"name": r["item_name"], "qty": r["qty_issued"], "unit": r["unit"]}
-                    for _, r in items_df.iterrows()
-                ]
-
-                html = generate_challan_html(
-                    challan_no=f"CHLN-{open_id}",
-                    date=header["challan_date"],
-                    po_no="",
-                    project_location=header["project_location"],
-                    items=items
-                )
-
-                st.components.v1.html(html, height=900, scrolling=True)
-
-
-            # PRINT
             if b2.button("Print", key=f"print_{challan_id}"):
-                with engine.connect() as conn:
-                    header = pd.read_sql(
-                        text("SELECT * FROM challan_header WHERE challan_id = :cid"),
-                        conn,
-                        params={"cid": challan_id}
-                    ).iloc[0]
+                print_challan(challan_id)
 
-                    items_df = pd.read_sql(
-                        text("""
-                            SELECT im.item_name, im.unit, ci.qty_issued
-                            FROM challan_items ci
-                            JOIN inventory_master im ON ci.inventory_id = im.id
-                            WHERE ci.challan_id = :cid
-                        """),
-                        conn,
-                        params={"cid": challan_id}
-                    )
+        # ---------- OPENED CHALLAN PREVIEW (ONLY ONCE) ----------
+        if st.session_state.get("opened_challan_id") is not None:
+            open_id = st.session_state["opened_challan_id"]
+            st.divider()
+            title_col, close_col = st.columns([8, 2])
+            with title_col:
+                st.subheader(f"Challan Preview – CHLN-{open_id}")
+            with close_col:
+                if st.button("X", key=f"close_{open_id}"):
+                    st.session_state["opened_challan_id"] = None
+                    st.rerun()
 
-                items = [
-                    {"name": r["item_name"], "qty": r["qty_issued"], "unit": r["unit"]}
-                    for _, r in items_df.iterrows()
-                ]
+            # Fetch header & items for preview
+            with engine.connect() as conn:
+                header = pd.read_sql(
+                    text("SELECT * FROM challan_header WHERE challan_id = :cid"),
+                    conn,
+                    params={"cid": open_id}
+                ).iloc[0]
 
-                html = generate_challan_html(
-                    challan_no=f"CHLN-{challan_id}",
-                    date=header["challan_date"],
-                    po_no="",
-                    project_location=header["project_location"],
-                    items=items
+                items_df = pd.read_sql(
+                    text("""
+                        SELECT im.item_name, im.unit, ci.qty_issued
+                        FROM challan_items ci
+                        JOIN inventory_master im ON ci.inventory_id = im.id
+                        WHERE ci.challan_id = :cid
+                    """),
+                    conn,
+                    params={"cid": open_id}
                 )
 
-                html += """
-                <script>
-                    window.onload = function() {
-                        window.print();
-                    }
-                </script>
-                """
+            items = [
+                {"name": r["item_name"], "qty": r["qty_issued"], "unit": r["unit"]}
+                for _, r in items_df.iterrows()
+            ]
 
-                st.components.v1.html(html, height=900, scrolling=True) 
+            html = generate_challan_html(
+                challan_no=f"CHLN-{open_id}",
+                date=header["challan_date"],
+                po_no="",
+                project_location=header["project_location"],
+                items=items
+            )
+
+            st.components.v1.html(html, height=900, scrolling=True)
+
+# ---------- PRINT FUNCTION ----------
+def print_challan(challan_id):
+    with engine.connect() as conn:
+        header = pd.read_sql(
+            text("SELECT * FROM challan_header WHERE challan_id = :cid"),
+            conn,
+            params={"cid": challan_id}
+        ).iloc[0]
+
+        items_df = pd.read_sql(
+            text("""
+                SELECT im.item_name, im.unit, ci.qty_issued
+                FROM challan_items ci
+                JOIN inventory_master im ON ci.inventory_id = im.id
+                WHERE ci.challan_id = :cid
+            """),
+            conn,
+            params={"cid": challan_id}
+        )
+
+    items = [
+        {"name": r["item_name"], "qty": r["qty_issued"], "unit": r["unit"]}
+        for _, r in items_df.iterrows()
+    ]
+
+    html = generate_challan_html(
+        challan_no=f"CHLN-{challan_id}",
+        date=header["challan_date"],
+        po_no="",
+        project_location=header["project_location"],
+        items=items
+    )
+
+    html += """
+    <script>
+        window.onload = function() {
+            window.print();
+        }
+    </script>
+    """
+    st.components.v1.html(html, height=900, scrolling=True)
